@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TS Angel Forex AI</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow-x: hidden;
+      font-family: 'Arial', sans-serif;
+      color: white;
+      background: black;
+    }
+    canvas#starfield {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+    }
+    body {
+      text-align: center;
+      padding: 20px;
+    }
+    h1 {
+      color: #00ffe7;
+      animation: neon-flicker 1.5s infinite;
+    }
+    #timeDisplay {
+      font-size: 1.2rem;
+      color: #ffcc00;
+      animation: neon-flicker 2s infinite;
+    }
+    select, button, input {
+      padding: 12px 20px;
+      margin: 10px;
+      font-size: 1rem;
+      border-radius: 5px;
+      background-color: #111;
+      color: #00ffea;
+      border: 2px solid #00ffea;
+      cursor: pointer;
+      animation: glow-pulse 2s infinite;
+    }
+    button:hover {
+      background-color: #00ffea;
+      color: black;
+    }
+    iframe {
+      width: 100%;
+      height: 500px;
+      border: none;
+      margin-top: 25px;
+      border-radius: 10px;
+      box-shadow: 0 0 20px #00ffe7;
+      animation: glow-pulse 3s infinite;
+    }
+    .signal-box {
+      margin-top: 25px;
+      background: #111;
+      padding: 20px;
+      border-radius: 10px;
+      font-size: 1.1rem;
+      color: #ffcc00;
+      animation: glow-pulse 1.5s infinite;
+    }
+    .watermark {
+      margin-top: 40px;
+      font-size: 1.2rem;
+      color: #00ffe7;
+      animation: neon-flicker 2s infinite;
+    }
+    @keyframes neon-flicker {
+      0%, 100% { text-shadow: 0 0 5px #0ff, 0 0 10px #0ff, 0 0 20px #0ff; }
+      50% { text-shadow: 0 0 2px #0ff, 0 0 5px #0ff; }
+    }
+    @keyframes glow-pulse {
+      0%, 100% { box-shadow: 0 0 10px #00ffe7, 0 0 20px #00ffe7; }
+      50% { box-shadow: 0 0 5px #00ffe7, 0 0 10px #00ffe7; }
+    }
+    .levels span {
+      display: inline-block; margin: 2px 6px; padding: 4px 8px; border: 1px dashed #00ffe7; border-radius: 6px; cursor: pointer;
+    }
+    .muted { color:#bbb; font-size:0.95rem; }
+  </style>
+</head>
+<body>
+<canvas id="starfield"></canvas>
+<h1>🚀 TS Angel Forex AI (BTC & GOLD)</h1>
+<p id="timeDisplay">⏰ Current Indian Time: </p>
+
+<!-- Pair + Mode Controls (minimal, same styling) -->
+<select id="pairSelect">
+  <option value="BTCUSD">BTCUSD</option>
+  <option value="XAUUSD">XAUUSD</option>
+</select>
+<select id="modeSelect" title="Auto = monitor + delayed auto-exec, Manual = button or level tap">
+  <option value="MANUAL">MANUAL</option>
+  <option value="AUTO">AUTO</option>
+</select>
+<button id="generateBtn" onclick="playClick(); generateSignal()">📡 Generate Signal</button>
+<button id="resetBtn" onclick="resetSignal()">♻️ Reset</button>
+
+<div class="signal-box" id="signalBox">🔍 Waiting for signal...</div>
+<iframe id="tvChart"></iframe>
+<div class="watermark">💡 Created by Trader Sumon</div>
+<audio id="clickSound" src="https://assets.mixkit.co/sfx/preview/mixkit-game-click-1114.mp3"></audio>
+
+<script>
+/* ==== DOM Hooks ==== */
+const pairSelect   = document.getElementById("pairSelect");
+const modeSelect   = document.getElementById("modeSelect");
+const tvChart      = document.getElementById("tvChart");
+const signalBox    = document.getElementById("signalBox");
+const timeDisplay  = document.getElementById("timeDisplay");
+const clickSound   = document.getElementById("clickSound");
+
+/* ==== State ==== */
+let activeSignal   = null;     // current running signal
+let pendingTimer   = null;     // for 10-minute delayed auto exec
+let autoMonitorId  = null;     // interval id for auto monitoring
+const AUTO_DELAY_MS = 10 * 60 * 1000;   // 10 minutes delay before auto execute
+const MONITOR_EVERY_MS = 60 * 1000;     // check every 1 minute (lightweight)
+
+/* ==== Voice ==== */
+function speak(text) {
+  try {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'bn-IN';
+    const voices = speechSynthesis.getVoices();
+    const femaleVoice = voices.find(v => v.lang === 'bn-IN' && v.name?.toLowerCase().includes("female"));
+    if (femaleVoice) utterance.voice = femaleVoice;
+    speechSynthesis.speak(utterance);
+  } catch {}
+}
+function playClick() { try { clickSound.play(); } catch {} }
+
+/* ==== TradingView Chart ==== */
+pairSelect.addEventListener("change", loadChart);
+function loadChart() {
+  const symbol  = pairSelect.value;
+  const tvSymbol = symbol === "BTCUSD" ? "BINANCE:BTCUSDT" : "OANDA:XAUUSD";
+  tvChart.src = `https://s.tradingview.com/widgetembed/?frameElementId=tvChart&symbol=${tvSymbol}&interval=5&theme=dark&style=1&timezone=Asia/Kolkata&withdateranges=1&studies=[]&toolbarbg=rgba(0,0,0,1)&hide_side_toolbar=0&allow_symbol_change=1&saveimage=1&details=1&hotlist=1&calendar=1&drawings_access=%7B%22type%22%3A%22black%22%7D`;
+}
+loadChart();
+
+/* ==== Live Price ==== */
+async function fetchLivePrice(pair) {
+  try {
+    if (pair === "BTCUSD") {
+      const res  = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
+      const data = await res.json();
+      return parseFloat(data.price);
+    } else {
+      const res  = await fetch("https://api.twelvedata.com/price?symbol=XAU/USD&apikey=cd96961a49e242fe939a80866e70c57d");
+      const data = await res.json();
+      return parseFloat(data.price);
+    }
+  } catch (error) {
+    signalBox.innerHTML = "❌ ERROR FETCHING LIVE PRICE!";
+    console.error(error);
+    return null;
+  }
+}
+
+/* ==== XAU Logic (your original levels) ==== */
+function getGoldSetup(price) {
+  // Bias + momentum
+  const dailyBias    = price > 3350.5 ? "BUY" : "SELL";
+  const momentumSell = price < 3377.28;
+  const momentumBuy  = price > 3377.28;
+
+  // Zones
+  const sellZones = [3372, 3370, 3365, 3360, 3356, 3351];
+  const buyZones  = [3381, 3385, 3389, 3394];
+
+  // Which zone list to use
+  const entryZones = momentumSell ? sellZones : buyZones;
+
+  // Are we near any zone?
+  const inZone = entryZones.some(level => Math.abs(price - level) <= 0.5);
+  const direction = momentumSell ? "SELL" : "BUY";
+
+  // Targets & SL (based on direction)
+  const entry = parseFloat(price.toFixed(2));
+  const tp1   = direction === "BUY" ? (entry + 5).toFixed(2)  : (entry - 5).toFixed(2);
+  const tp2   = direction === "BUY" ? (entry + 10).toFixed(2) : (entry - 10).toFixed(2);
+  const tp3   = direction === "BUY" ? (entry + 15).toFixed(2) : (entry - 15).toFixed(2);
+  const sl    = direction === "BUY" ? (entry - 4).toFixed(2)  : (entry + 4).toFixed(2);
+
+  return { dailyBias, momentumBuy, momentumSell, entryZones, inZone, direction, entry, tp1, tp2, tp3, sl };
+}
+
+/* ==== Render Signal ==== */
+function renderSignalUpper(text) {
+  signalBox.innerHTML = text.toUpperCase().replace(/\n/g, "<br>");
+}
+function renderLevelsClickable(levels=[]) {
+  if (!levels.length) return "";
+  return `<div class="levels"><span class="muted">TAP LEVEL TO EXECUTE:</span><br>${
+    levels.map(l => `<span data-lvl="${l}" title="Tap to execute at level">${l}</span>`).join(" ")
+  }</div>`;
+}
+signalBox.addEventListener("click", (e) => {
+  const span = e.target.closest("span[data-lvl]");
+  if (!span) return;
+  const lvl = parseFloat(span.getAttribute("data-lvl"));
+  tapExecuteAtLevel(lvl);
+});
+
+/* ==== Manual Tap Execute ==== */
+async function tapExecuteAtLevel(level) {
+  const pair = pairSelect.value;
+  const price = await fetchLivePrice(pair);
+  if (price == null) return;
+  const time = new Date().toLocaleTimeString("en-IN", { hour12: true });
+
+  const direction = price <= level ? "BUY" : "SELL"; // simple tap logic
+  const entry = level.toFixed(2);
+  const tp1 = direction === "BUY" ? (level + 5).toFixed(2) : (level - 5).toFixed(2);
+  const tp2 = direction === "BUY" ? (level + 10).toFixed(2) : (level - 10).toFixed(2);
+  const tp3 = direction === "BUY" ? (level + 15).toFixed(2) : (level - 15).toFixed(2);
+  const sl  = direction === "BUY" ? (level - 4).toFixed(2)  : (level + 4).toFixed(2);
+
+  activeSignal = { pair, direction, entry, tp1, tp2, tp3, sl, time, mode: "MANUAL-TAP", status: "RUNNING" };
+
+  const text =
+`📊 ${pair}: ${direction}
+⚙️ MODE: MANUAL-TAP
+🟡 ENTRY: ${entry}
+🎯 TP1: ${tp1} | TP2: ${tp2} | TP3: ${tp3}
+🛑 SL: ${sl}
+📍 LIVE PRICE: ${price}
+📈 TRADE IS LIVE...`;
+  renderSignalUpper(text);
+  speak(`${pair} ${direction}. Entry ${entry}. TP1 ${tp1}, TP2 ${tp2}, SL ${sl}`);
+}
+
+/* ==== Manual Button Generate ==== */
+async function generateSignal() {
+  const now  = new Date();
+  const pair = pairSelect.value;
+  const day  = now.getDay();
+  const time = now.toLocaleTimeString("en-IN", { hour12: true });
+
+  if (activeSignal) {
+    renderSignalUpper("⏳ WAIT: A SIGNAL IS ALREADY ACTIVE!");
+    speak("Wait, a signal is already active");
+    return;
+  }
+  if ((pair === "XAUUSD") && (day === 6 || day === 0)) {
+    renderSignalUpper("⚠️ GOLD MARKET IS CLOSED TODAY.");
+    speak("Gold market is closed today");
+    return;
+  }
+
+  const price = await fetchLivePrice(pair);
+  if (!price) return;
+
+  if (pair === "XAUUSD") {
+    const s = getGoldSetup(price);
+    if (!s.inZone) {
+      const msg =
+`❌ NO VALID TRADE SETUP NOW.
+PRICE NOT NEAR ANY KEY ZONE.
+CURRENT: ${price}
+${renderLevelsClickable(s.entryZones)}`;
+      signalBox.innerHTML = msg.toUpperCase().replace(/\n/g, "<br>");
+      speak("No trade now. Price not near level zone.");
+      return;
+    }
+
+    activeSignal = { pair, direction: s.direction, entry: s.entry, tp1: s.tp1, tp2: s.tp2, tp3: s.tp3, sl: s.sl, time, mode: "INTRADAY", status: "RUNNING" };
+    const text =
+`📊 ${pair}: ${s.direction}
+⚙️ MODE: INTRADAY
+🟡 ENTRY: ${s.entry}
+🎯 TP1: ${s.tp1} | TP2: ${s.tp2} | TP3: ${s.tp3}
+🛑 SL: ${s.sl}
+📍 LIVE PRICE: ${price}
+📈 TRADE IS LIVE...`;
+    renderSignalUpper(text);
+    speak(`${pair} ${s.direction}. Entry ${s.entry}. TP1 ${s.tp1}, TP2 ${s.tp2}, SL ${s.sl}`);
+  } else {
+    renderSignalUpper("⚠️ BTC SIGNAL LOGIC NOT UPDATED YET.");
+    speak("BTC logic coming soon.");
+  }
+}
+
+/* ==== Auto Monitor (real-time) ==== */
+/*  - Checks every MONITOR_EVERY_MS (1 min default)
+    - If valid setup found, marks PENDING and schedules auto-exec after 10 minutes
+*/
+async function autoMonitorTick() {
+  if (activeSignal) return; // don't create another while running
+  const pair = pairSelect.value;
+  if (pair !== "XAUUSD") return; // BTC placeholder
+
+  const price = await fetchLivePrice(pair);
+  if (!price) return;
+  const s = getGoldSetup(price);
+
+  const baseHeader = `🛰️ AUTO MONITORING ACTIVE — PAIR: ${pair} — PRICE: ${price}`;
+  if (!s.inZone) {
+    const view =
+`${baseHeader}
+NO VALID SETUP NEAR ZONES.
+${renderLevelsClickable(s.entryZones)}`;
+    signalBox.innerHTML = view.toUpperCase().replace(/\n/g, "<br>");
+    return;
+  }
+
+  // Found a potential setup → mark pending & schedule execute after 10 minutes
+  const nowStr = new Date().toLocaleTimeString("en-IN", { hour12: true });
+  const pendingText =
+`${baseHeader}
+FOUND SETUP NEAR LEVEL — MARKED AS PENDING
+DIRECTION: ${s.direction}
+PLANNED ENTRY: ${s.entry}
+SL: ${s.sl} | TP1: ${s.tp1} | TP2: ${s.tp2} | TP3: ${s.tp3}
+WILL AUTO-EXECUTE IN 10 MINUTES IF STILL VALID
+DETECTED AT: ${nowStr}`;
+  renderSignalUpper(pendingText);
+  speak("Potential setup found. Will execute in ten minutes if still valid.");
+
+  // Clear any old timer
+  if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+
+  pendingTimer = setTimeout(async () => {
+    // Re-validate after 10 minutes
+    if (activeSignal) return;
+    const rePrice = await fetchLivePrice(pair);
+    if (!rePrice) return;
+    const re = getGoldSetup(rePrice);
+
+    if (re.inZone) {
+      const time = new Date().toLocaleTimeString("en-IN", { hour12: true });
+      activeSignal = { pair, direction: re.direction, entry: re.entry, tp1: re.tp1, tp2: re.tp2, tp3: re.tp3, sl: re.sl, time, mode: "AUTO", status: "RUNNING" };
+      const execText =
+`📊 ${pair}: ${re.direction}
+⚙️ MODE: AUTO
+🟡 ENTRY: ${re.entry}
+🎯 TP1: ${re.tp1} | TP2: ${re.tp2} | TP3: ${re.tp3}
+🛑 SL: ${re.sl}
+📍 LIVE PRICE: ${rePrice}
+✅ AUTO-EXECUTED AFTER 10 MINUTES`;
+      renderSignalUpper(execText);
+      speak(`${pair} ${re.direction}. Entry ${re.entry}. TP1 ${re.tp1}, TP2 ${re.tp2}, SL ${re.sl}`);
+    } else {
+      const cancelText =
+`${baseHeader}
+SETUP INVALID AFTER 10 MINUTES — AUTO EXECUTION CANCELLED
+${renderLevelsClickable(re.entryZones)}`;
+      signalBox.innerHTML = cancelText.toUpperCase().replace(/\n/g, "<br>");
+      speak("Setup cancelled after recheck.");
+    }
+    pendingTimer = null;
+  }, AUTO_DELAY_MS);
+}
+
+/* ==== Mode Switching ==== */
+modeSelect.addEventListener("change", handleModeChange);
+function handleModeChange() {
+  const mode = modeSelect.value;
+  if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+  if (autoMonitorId) { clearInterval(autoMonitorId); autoMonitorId = null; }
+  if (mode === "AUTO") {
+    renderSignalUpper("🛰️ AUTO MODE ON — MONITORING LIVE PRICE...");
+    autoMonitorId = setInterval(autoMonitorTick, MONITOR_EVERY_MS);
+    autoMonitorTick(); // run once immediately
+  } else {
+    renderSignalUpper("🖐️ MANUAL MODE — TAP A LEVEL OR PRESS GENERATE SIGNAL");
+  }
+}
+// start in MANUAL by default
+handleModeChange();
+
+/* ==== Reset ==== */
+function resetSignal() {
+  if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+  activeSignal = null;
+  renderSignalUpper("🔄 RESET DONE. WAITING FOR SIGNAL...");
+  speak("Reset done");
+}
+
+/* ==== Starfield animation (unchanged) ==== */
+const canvas = document.getElementById("starfield");
+const ctx = canvas.getContext("2d");
+let stars = [];
+function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+resizeCanvas();
+for (let i = 0; i < 200; i++) {
+  stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, size: Math.random() * 2, speed: Math.random() * 1 });
+}
+function animateStars() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#00ffe7";
+  stars.forEach(star => {
+    star.y += star.speed;
+    if (star.y > canvas.height) star.y = 0;
+    ctx.beginPath();
+    ctx.arc(star.x, star.y, star.size, 0, 2 * Math.PI);
+    ctx.fill();
+  });
+  requestAnimationFrame(animateStars);
+}
+animateStars();
+
+/* ==== Clock ==== */
+setInterval(() => {
+  const now = new Date();
+  timeDisplay.innerText = "⏰ CURRENT INDIAN TIME: " + now.toLocaleTimeString("en-IN").toUpperCase();
+}, 1000);
+</script>
+</body>
+</html>
